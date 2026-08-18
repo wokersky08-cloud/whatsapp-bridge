@@ -104,7 +104,10 @@ async function startSession(botId) {
       if (!m.message || m.key.fromMe) continue;
       const jid = m.key.remoteJid || "";
       if (jid.endsWith("@g.us") || jid === "status@broadcast") continue;
-      const chatId = jid.split("@")[0];
+      // Preserve the exact address WhatsApp used for this chat. Newer accounts
+      // can arrive as an @lid address; converting it to @s.whatsapp.net may
+      // target an unrelated phone number.
+      const chatId = jid;
       const msg = m.message;
       const text =
         msg.conversation ||
@@ -126,6 +129,7 @@ async function startSession(botId) {
         }
       }
 
+      logger.info({ botId, incomingJid: jid }, "incoming message");
       await postToApp(botId, {
         chatId,
         contactName: m.pushName || null,
@@ -139,7 +143,8 @@ async function startSession(botId) {
   return s;
 }
 
-app.get("/health", (_req, res) => res.json({ ok: true }));
+const BRIDGE_VERSION = "2026.08.18-jid-fix";
+app.get("/health", (_req, res) => res.json({ ok: true, version: BRIDGE_VERSION }));
 
 app.get("/session/:botId/status", auth, async (req, res) => {
   const s = state(req.params.botId);
@@ -167,7 +172,11 @@ app.post("/session/:botId/send", auth, async (req, res) => {
     return res.status(409).json({ error: "сессия қосылмаған" });
   }
   try {
+    // Webhooks now return the full JID, so replies go back to that exact chat.
+    // Keep accepting bare phone numbers for conversations created by older
+    // bridge versions.
     const jid = String(chatId).includes("@") ? String(chatId) : `${chatId}@s.whatsapp.net`;
+    logger.info({ botId: req.params.botId, outgoingJid: jid }, "sending reply");
     await s.sock.sendMessage(jid, { text: String(text) });
     res.json({ ok: true });
   } catch (e) {
